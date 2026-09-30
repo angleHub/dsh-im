@@ -1,4 +1,3 @@
-import { INJECTED_CONTEXT_TAGS } from '../context-enhancement.mjs';
 import { promptContentForMessage } from '../image-prompt.mjs';
 
 const REPLY_CONTENT_MAX_CODE_POINTS = 8_000;
@@ -80,7 +79,7 @@ function errorUnavailableReason(error) {
 function mergeDefined(base, loaded) {
   const merged = { ...base };
   for (const key of [
-    'messageId', 'authorId', 'authorName', 'content', 'attachments', 'unavailableReason',
+    'messageId', 'authorId', 'authorName', 'content', 'attachments', 'files', 'unavailableReason',
   ]) {
     if (loaded[key] !== undefined) merged[key] = loaded[key];
   }
@@ -108,6 +107,7 @@ function normalizeReference(reference) {
   const authorName = cleanString(reference.authorName, REPLY_AUTHOR_NAME_MAX_CODE_POINTS);
   const content = cleanString(reference.content, REPLY_CONTENT_MAX_CODE_POINTS, { multiline: true });
   const { attachments, truncated: attachmentsTruncated } = cleanAttachments(reference.attachments);
+  const files = Array.isArray(reference.files) ? reference.files.filter((file) => file && typeof file.load === 'function') : [];
   let unavailableReason = cleanUnavailableReason(reference.unavailableReason);
   if (!content.value && attachments.length === 0 && !unavailableReason) {
     unavailableReason = 'not-delivered';
@@ -120,29 +120,37 @@ function normalizeReference(reference) {
     ...(authorName.value ? { authorName: authorName.value } : {}),
     ...(content.value ? { content: content.value } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
+    ...(files.length > 0 ? { files } : {}),
     ...(unavailableReason ? { unavailableReason } : {}),
     ...(truncated ? { truncated: true } : {}),
   };
 }
 
 function replyBlock(reference) {
-  const json = JSON.stringify(reference).replace(/[<>&]/gu, (character) => ({
+  const { files: _files, ...visibleReference } = reference;
+  const json = JSON.stringify(visibleReference).replace(/[<>&]/gu, (character) => ({
     '<': '\\u003c',
     '>': '\\u003e',
     '&': '\\u0026',
   })[character]);
-  return `${INJECTED_CONTEXT_TAGS.replyOpen}${json}${INJECTED_CONTEXT_TAGS.replyClose}`;
+  return `<dsh_im_reply_to>${json}</dsh_im_reply_to>`;
 }
 
 export function hasReplyReference(message) {
   return objectReference(message?.replyTo);
 }
 
-export async function promptContentForInboundMessage(message, { signal, deferImages = false } = {}) {
+export async function promptContentForInboundMessage(message, { signal } = {}) {
   if (!hasReplyReference(message)) {
-    return promptContentForMessage(message, { signal, deferImages });
+    return promptContentForMessage(message, { signal });
   }
   const reference = normalizeReference(await resolveReference(message.replyTo, signal));
-  const currentContent = await promptContentForMessage(message, { signal, deferImages });
+  // A quoted attachment is part of the user's explicit request. Preserve its
+  // lazy source on the current message so the normal inbound-file pipeline
+  // downloads and stages it alongside files attached to the new message.
+  if (Array.isArray(reference.files) && reference.files.length > 0) {
+    message.files = [...(Array.isArray(message.files) ? message.files : []), ...reference.files];
+  }
+  const currentContent = await promptContentForMessage(message, { signal });
   return [{ type: 'text', text: replyBlock(reference) }, ...currentContent];
 }
