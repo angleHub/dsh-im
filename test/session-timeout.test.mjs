@@ -21,6 +21,7 @@ import {
   validateSessionTimeoutField,
 } from '../src/channels/shared/session-timeout.mjs';
 import { SessionTimeoutStore } from '../src/channels/shared/session-timeout-store.mjs';
+import { InboundTtlStore } from '../src/channels/shared/inbound-ttl-store.mjs';
 import { createSessionTimeoutService } from '../plugin-src/host/session-timeout-service.mjs';
 import {
   SESSION_TIMEOUT_ENDPOINTS,
@@ -170,6 +171,26 @@ test('SessionTimeoutStore drops a stale sessionActivity block on the next settin
   await store.setSettings({ enabled: true });
   const persisted = JSON.parse(await readFile(settingsPath, 'utf8'));
   assert.equal(persisted.sessionActivity, undefined, 'stale activity is dropped on rewrite');
+});
+
+test('TTL and session timeout settings survive interleaved and concurrent saves', async (t) => {
+  const root = await directory(t, 'dsh-im-shared-settings-');
+  const path = join(root, 'settings.json');
+  const ttl = await new InboundTtlStore(path).load();
+  const timeout = await new SessionTimeoutStore(path).load();
+
+  await timeout.setSettings({ enabled: true, timeoutMinutes: 45 });
+  await ttl.setTtlHours(24);
+  await timeout.setSettings({ notify: true });
+  await Promise.all([ttl.setTtlHours(48), timeout.setSettings({ timeoutMinutes: 60 })]);
+
+  const document = JSON.parse(await readFile(path, 'utf8'));
+  assert.equal(document.inboundAttachmentTtlHours, 48);
+  assert.equal(document.sessionTimeout.enabled, true);
+  assert.equal(document.sessionTimeout.notify, true);
+  assert.equal(document.sessionTimeout.timeoutMinutes, 60);
+  assert.equal((await new InboundTtlStore(path).load()).getTtlHours(), 48);
+  assert.equal((await new SessionTimeoutStore(path).load()).getSettings().timeoutMinutes, 60);
 });
 
 test('createSessionTimeoutService expires an idle conversation by unbinding the session', async () => {

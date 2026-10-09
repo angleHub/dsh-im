@@ -13,6 +13,7 @@ import {
   isConversationDirectoryPath,
 } from '../../src/channels/shared/conversation-directory.mjs';
 import { sweepInboundAttachments } from '../../src/channels/shared/inbound-file.mjs';
+import { withSessionBindingLock } from '../../src/channels/shared/session-binding-lock.mjs';
 
 const DEFAULT_SCAN_INTERVAL_MS = 5 * 60_000;
 // A tracked conversation is shielded while a turn may still be running so a
@@ -57,6 +58,7 @@ export function createSessionTimeoutService({
   store,
   stateStore,
   deliveryService = null,
+  inboundTtlService = null,
   logger = console,
   intervalMs = DEFAULT_SCAN_INTERVAL_MS,
   replyTimeoutBufferMs = DEFAULT_REPLY_TIMEOUT_BUFFER_MS,
@@ -455,37 +457,37 @@ export function createSessionTimeoutService({
   }
 
   async function cleanupInboundScope({ directory, base, defaultWorkspace }) {
-    let deleted = 0;
-    // Sweep the base workspace's inbound subtree first; this covers the
-    // common case where conversation directory isolation is off.
+    // A shared base has no per-conversation attachment ownership metadata.
+    // Only a recorded, isolated conversation directory is safe to sweep.
+    if (!directory || !isConversationDirectoryPath(directory, {
+      prefix: CONVERSATION_DIRECTORY_PREFIX,
+    })) return { scope: 'inbound', deleted: 0, reason: 'unknown-owner' };
+    let canonicalDirectory;
+    let canonicalBase;
     try {
-      const result = await sweepInboundAttachments(base, 0, {
-        isTracked: () => false,
+      canonicalDirectory = realpathSync(directory);
+      canonicalBase = realpathSync(base);
+    } catch {
+      return { scope: 'inbound', deleted: 0, reason: 'unknown-owner' };
+    }
+    if (directory === defaultWorkspace || canonicalDirectory === canonicalBase
+      || relativePathUnder(canonicalBase, canonicalDirectory) === null) {
+      return { scope: 'inbound', deleted: 0, reason: 'unknown-owner' };
+    }
+    // Without the live registry, an in-flight staged batch cannot be ruled out.
+    if (typeof inboundTtlService?.isTrackedDirectory !== 'function') {
+      return { scope: 'inbound', deleted: 0, reason: 'tracking-unavailable' };
+    }
+    try {
+      const result = await sweepInboundAttachments(directory, 0, {
+        isTracked: (path) => inboundTtlService.isTrackedDirectory(path),
       });
-      deleted += result.deleted;
+      return { scope: 'inbound', deleted: result.deleted,
+        reason: result.deleted > 0 ? 'swept' : 'no-op' };
     } catch (error) {
-      logger.warn?.(
-        `[dsh-im] session timeout inbound sweep failed under ${base}`,
-        error,
-      );
+      logger.warn?.(`[dsh-im] session timeout inbound sweep failed under ${directory}`, error);
+      return { scope: 'inbound', deleted: 0, reason: 'error' };
     }
-    // If a conversation directory was recorded and differs from the base,
-    // sweep its inbound subtree too — it holds the conversation's own staged
-    // files under `.dsh-im/inbound/`.
-    if (directory && directory !== base && directory !== defaultWorkspace) {
-      try {
-        const result = await sweepInboundAttachments(directory, 0, {
-          isTracked: () => false,
-        });
-        deleted += result.deleted;
-      } catch (error) {
-        logger.warn?.(
-          `[dsh-im] session timeout inbound sweep failed under ${directory}`,
-          error,
-        );
-      }
-    }
-    return { scope: 'inbound', deleted, reason: deleted > 0 ? 'swept' : 'no-op' };
   }
 
   async function cleanupDirectoryScope({
@@ -571,7 +573,7 @@ export function createSessionTimeoutService({
     let recordCleared = false;
     try {
       await workspaces.clearSessionDirectory(botId, conversationKey, {
-        alsoClearWorkspaceOverride: false,
+        alsoClearWorkspaceOverride: true,
       });
       recordCleared = true;
     } catch (error) {
@@ -613,12 +615,29 @@ export function createSessionTimeoutService({
    * and file cleanup never block the unbinding; if they fail only the core
    * unbind runs, which is the minimal safe behavior.
    */
-  async function expire(conversationKey, { force = false } = {}) {
+  async function expire(conversationKey, { force = false, expectedRecord = null } = {}) {
     if (typeof conversationKey !== 'string' || !conversationKey) return null;
     const settings = store.getSettings();
     if (!force && !settingsEnabled(settings)) return null;
-    const record = store.getTracked(conversationKey);
+    const initialRecord = store.getTracked(conversationKey);
+    if (expectedRecord && (!initialRecord
+      || initialRecord.lastActivityAt !== expectedRecord.lastActivityAt
+      || initialRecord.sessionId !== expectedRecord.sessionId)) return null;
+    const record = initialRecord;
     const sessionId = await resolveSessionId(conversationKey, record);
+    const storeInstance = await resolveStateStore(conversationKey, record);
+    if (!storeInstance) return null;
+    return withSessionBindingLock(storeInstance, conversationKey, async () => {
+      const currentRecord = store.getTracked(conversationKey);
+      if (!currentRecord || currentRecord.lastActivityAt !== record.lastActivityAt
+        || currentRecord.sessionId !== record.sessionId) return null;
+      const currentSessionId = await resolveSessionId(conversationKey, currentRecord);
+      if (currentSessionId !== sessionId) return null;
+      return expireLocked(conversationKey, currentRecord, currentSessionId, settings, storeInstance);
+    });
+  }
+
+  async function expireLocked(conversationKey, record, sessionId, settings, storeInstance) {
     if (sessionId && settings.notify === true && record?.botId) {
       await notify(conversationKey, sessionId, record.botId, settings).catch((error) => {
         logger.warn?.('[dsh-im] session timeout notification error', error);
@@ -637,7 +656,6 @@ export function createSessionTimeoutService({
         );
       }
     }
-    const storeInstance = await resolveStateStore(conversationKey, record);
     if (storeInstance && typeof storeInstance.clearSession === 'function') {
       await storeInstance.clearSession(conversationKey).catch((error) => {
         logger.warn?.('[dsh-im] session timeout clearSession failed', error);
@@ -698,7 +716,7 @@ export function createSessionTimeoutService({
         continue;
       }
       try {
-        const result = await expire(entry.key, { force: false });
+        const result = await expire(entry.key, { force: false, expectedRecord: entry });
         if (result) {
           expired.push(result.conversationKey);
           logger.info?.(

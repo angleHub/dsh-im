@@ -13,7 +13,7 @@ import {
 } from '../../src/channels/shared/session-timeout.mjs';
 import { SessionTimeoutStore } from '../../src/channels/shared/session-timeout-store.mjs';
 import { createSessionTimeoutService } from './session-timeout-service.mjs';
-import { inboundTtlSettingsPath } from './inbound-ttl-runtime.mjs';
+import { getInboundTtlRuntime, inboundTtlSettingsPath } from './inbound-ttl-runtime.mjs';
 
 const runtimes = new Map();
 
@@ -77,6 +77,7 @@ export function getSessionTimeoutRuntime(ctx, config = {}) {
     deliveryService: null,
     logger,
     replyTimeoutBufferMs,
+    inboundTtlService: getInboundTtlRuntime(ctx, config).service,
   });
   const runtime = Object.freeze({ store, service });
   const entry = { runtime };

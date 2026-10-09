@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readdir, readFile, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import { DEFAULT_INBOUND_TTL_HOURS, normalizeInboundTtlHours } from './inbound-ttl.mjs';
+import { updateSharedSettingsDocument } from './shared-settings-document.mjs';
 
 const DOCUMENT_VERSION = 1;
 // Fail-safe TTL for documents that exist but cannot be trusted (damage or an
@@ -14,25 +14,6 @@ function invalidTtlError() {
   const error = new Error('Invalid inbound attachment TTL hours.');
   error.code = 'inbound-ttl-invalid';
   return error;
-}
-
-// Mirrors the atomic settings writes of the bot workspace store and the
-// update service: create a private temporary file, then rename it into place.
-async function writeSettingsDocument(path, document) {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: 'wx',
-    });
-    await rename(temporary, path);
-  } finally {
-    await unlink(temporary).catch((error) => {
-      if (error.code !== 'ENOENT') throw error;
-    });
-  }
 }
 
 /** Durable host-side settings for the global inbound attachment TTL. */
@@ -100,10 +81,10 @@ export class InboundTtlStore {
   async setTtlHours(value) {
     const ttlHours = normalizeInboundTtlHours(value);
     if (ttlHours === null) throw invalidTtlError();
-    await writeSettingsDocument(this.#path, {
-      version: DOCUMENT_VERSION,
+    await updateSharedSettingsDocument(this.#path, (document) => ({
+      ...document,
       inboundAttachmentTtlHours: ttlHours,
-    });
+    }));
     this.#ttlHours = ttlHours;
     return ttlHours;
   }

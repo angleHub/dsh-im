@@ -11,14 +11,14 @@
 // Feishu chat_id / open_id records into the user's settings.json on every
 // inbound message and turn-end event.
 
-import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { readdir, readFile, unlink } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 
 import {
   DEFAULT_SESSION_TIMEOUT_SETTINGS,
   normalizeSessionTimeoutSettings,
 } from './session-timeout.mjs';
+import { updateSharedSettingsDocument } from './shared-settings-document.mjs';
 
 const DOCUMENT_VERSION = 1;
 // Damage fallback: an unreadable document never starts timeout cleanup — it
@@ -33,25 +33,6 @@ function invalidSessionTimeoutError() {
   const error = new Error('Invalid session timeout settings.');
   error.code = 'session-timeout-invalid';
   return error;
-}
-
-// Atomic write copy of writeSettingsDocument in inbound-ttl-store. Kept inline
-// to avoid importing across modules; the contract is identical.
-async function writeSettingsDocument(path, document) {
-  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  const temporary = `${path}.${randomUUID()}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(document, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-      flag: 'wx',
-    });
-    await rename(temporary, path);
-  } finally {
-    await unlink(temporary).catch((error) => {
-      if (error.code !== 'ENOENT') throw error;
-    });
-  }
 }
 
 /**
@@ -75,10 +56,6 @@ export class SessionTimeoutStore {
   #settings = structuredClone(DEFAULT_SESSION_TIMEOUT_SETTINGS);
   /** @type {Map<string, {botId:string, sessionId?:string, lastActivityAt:number, runningSince?:number}>} */
   #activity = new Map();
-  /** Inbound TTL and a sibling feature share this document; the store keeps
-   *  only the two sub-objects it owns. Persisting the whole document would
-   *  clobber inboundAttachmentTtlHours when only this feature changed. */
-  #inboundTtlHours = 168;
 
   constructor(path) {
     if (typeof path !== 'string' || !path) {
@@ -107,14 +84,12 @@ export class SessionTimeoutStore {
       if (error?.code !== 'ENOENT') throw error;
       this.#settings = structuredClone(DEFAULT_SESSION_TIMEOUT_SETTINGS);
       this.#activity = new Map();
-      this.#inboundTtlHours = 168;
       this.#wasFresh = true;
       await this.#removeStaleTemporaries();
       return this;
     }
     const read = this.#readDocument(raw);
     this.#settings = read.settings;
-    this.#inboundTtlHours = read.inboundTtlHours;
     this.#wasFresh = read.fresh;
     await this.#removeStaleTemporaries();
     return this;
@@ -154,14 +129,12 @@ export class SessionTimeoutStore {
     } catch {
       return {
         settings: structuredClone(UNREADABLE_SESSION_TIMEOUT_SETTINGS),
-        inboundTtlHours: 168,
         fresh: false,
       };
     }
     if (!document || typeof document !== 'object' || Array.isArray(document)) {
       return {
         settings: structuredClone(UNREADABLE_SESSION_TIMEOUT_SETTINGS),
-        inboundTtlHours: 168,
         fresh: false,
       };
     }
@@ -170,7 +143,6 @@ export class SessionTimeoutStore {
     if (document.version !== DOCUMENT_VERSION) {
       return {
         settings: structuredClone(UNREADABLE_SESSION_TIMEOUT_SETTINGS),
-        inboundTtlHours: 168,
         fresh: false,
       };
     }
@@ -178,10 +150,7 @@ export class SessionTimeoutStore {
     // the runtime can then seed host-config defaults as the initial values.
     const fresh = document.sessionTimeout === undefined;
     const settings = normalizeSessionTimeoutSettings(document.sessionTimeout);
-    const inboundTtlHours = typeof document.inboundAttachmentTtlHours === 'number'
-      ? document.inboundAttachmentTtlHours
-      : 168;
-    return { settings, inboundTtlHours, fresh };
+    return { settings, fresh };
   }
 
   getSettings() {
@@ -209,11 +178,9 @@ export class SessionTimeoutStore {
     // `sessionActivity` is deliberately absent: activity is memory-only, and
     // rebuilding the document this way also drops any stale copy an older
     // version left behind.
-    await writeSettingsDocument(this.#path, {
-      version: DOCUMENT_VERSION,
-      ...(typeof this.#inboundTtlHours === 'number'
-        ? { inboundAttachmentTtlHours: this.#inboundTtlHours } : {}),
-      sessionTimeout: structuredClone(next),
+    await updateSharedSettingsDocument(this.#path, (document) => {
+      const { sessionActivity, ...retained } = document;
+      return { ...retained, sessionTimeout: structuredClone(next) };
     });
     this.#settings = structuredClone(next);
     return structuredClone(next);

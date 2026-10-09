@@ -171,6 +171,8 @@ export function createInboundTtlService({
     stagingRetention,
     trackDirectory,
     trackStaged,
+    isTrackedDirectory: (directory) => isTrackedNow(directory)
+      || (canonicalPath(directory) !== null && isTrackedNow(canonicalPath(directory))),
     sweepNow,
     start,
     resetSweepSchedule,
