@@ -5317,7 +5317,12 @@ export class FeishuHarnessBridge {
       && (nonEmptyString(message.content) || hasInboundImages(message) || hasInboundFiles(message));
     if (!topicAnchor) return build(message);
 
-    const withoutAnchor = { ...message };
+    // Keep the temporary topic-root copy connected to the final request's
+    // attachment array. Reply resolution may append lazy files to it.
+    const withoutAnchor = {
+      ...message,
+      files: Array.isArray(message.files) ? message.files : (message.files = []),
+    };
     delete withoutAnchor.replyTo;
     const base = await build(withoutAnchor);
     let preparedSessionId;

@@ -43,6 +43,16 @@ test('messages without reply references retain existing prompt content exactly',
   }
 });
 
+test('deferred image processing is forwarded through reply handling', async () => {
+  const message = {
+    content: 'describe this',
+    images: [{ name: 'large.png', size: 6 * 1024 * 1024 }],
+    replyTo: { content: 'quoted text' },
+  };
+  const output = await promptContentForInboundMessage(message, { deferImages: true });
+  assert.deepEqual(output.at(-1), { type: 'text', text: 'describe this' });
+});
+
 test('reply metadata is a safe leading block and current content remains separate', async () => {
   const message = {
     content: '那么最终的数字是多少？',
