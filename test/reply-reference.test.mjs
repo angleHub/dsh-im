@@ -53,6 +53,25 @@ test('deferred image processing is forwarded through reply handling', async () =
   assert.deepEqual(output.at(-1), { type: 'text', text: 'describe this' });
 });
 
+test('rebuilding a quoted prompt restores original files before appending quote files', async () => {
+  const original = { name: 'current.txt' };
+  const quoted = { name: 'quoted.txt', load: async () => ({ data: Buffer.from('quoted') }) };
+  const files = [original];
+  const message = {
+    content: 'current',
+    files,
+    replyTo: { content: 'quoted', files: [quoted] },
+  };
+
+  await promptContentForInboundMessage(message, { originalFiles: [...files] });
+  assert.deepEqual(message.files, [original, quoted]);
+  assert.strictEqual(message.files, files);
+
+  await promptContentForInboundMessage(message, { originalFiles: [original] });
+  assert.deepEqual(message.files, [original, quoted]);
+  assert.strictEqual(message.files, files);
+});
+
 test('reply metadata is a safe leading block and current content remains separate', async () => {
   const message = {
     content: '那么最终的数字是多少？',

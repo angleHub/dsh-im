@@ -140,7 +140,10 @@ export function hasReplyReference(message) {
   return objectReference(message?.replyTo);
 }
 
-export async function promptContentForInboundMessage(message, { signal, deferImages = false } = {}) {
+export async function promptContentForInboundMessage(
+  message,
+  { signal, deferImages = false, originalFiles } = {},
+) {
   if (!hasReplyReference(message)) {
     return promptContentForMessage(message, { signal, deferImages });
   }
@@ -148,6 +151,14 @@ export async function promptContentForInboundMessage(message, { signal, deferIma
   // A quoted attachment is part of the user's explicit request. Preserve its
   // lazy source on the current message so the normal inbound-file pipeline
   // downloads and stages it alongside files attached to the new message.
+  if (Array.isArray(originalFiles)) {
+    if (!Array.isArray(message.files)) message.files = [];
+    // A workspace retry can rebuild the same quoted prompt. Restore the
+    // caller's original attachments before appending the lazy quote files;
+    // keep the existing array object so askOptions.files sees the update.
+    message.files.length = 0;
+    message.files.push(...originalFiles);
+  }
   if (Array.isArray(reference.files) && reference.files.length > 0) {
     if (!Array.isArray(message.files)) message.files = [];
     message.files.push(...reference.files);
