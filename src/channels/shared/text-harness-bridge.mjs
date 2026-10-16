@@ -73,6 +73,7 @@ import {
   setLastMessageFailure,
 } from './message-failure.mjs';
 import { beginStatusReaction } from './status-reaction.mjs';
+import { startNewConversation } from './new-command.mjs';
 
 const INTERACTION_RESOLVED_TEXT = '这个问题已在其他客户端处理，无需再次回答。';
 const FILE_ONLY_COMPLETION_TEXT = '任务已完成。';
@@ -758,8 +759,16 @@ export class TextHarnessBridge {
         return;
       }
       if (!hasImages && !hasFiles && command === '/new') {
-        await this.#state.clearSession(conversationKey);
-        await this.#bot.sendText(target, t('已开启新会话。请发送你的问题。'));
+        const receipt = await startNewConversation({ state: this.#state, harness: this.#harness, key: conversationKey });
+        if (this.#contextHooks?.onSessionCleared) {
+          try {
+            await this.#contextHooks.onSessionCleared(conversationKey);
+          } catch (error) {
+            // The cleared session is already done; a failed context reset must not block the command.
+            this.#logger.warn?.(`[dsh-im:${this.#descriptor.key}] failed to reset context anchors after /new:`, error?.message ?? error);
+          }
+        }
+        await this.#bot.sendText(target, `${receipt}\n${t('请发送你的问题。')}`);
         return;
       }
       const compactCommand = !hasImages && !hasFiles
