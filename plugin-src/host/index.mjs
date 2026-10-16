@@ -21,6 +21,8 @@ import { createDeliveryService } from './delivery-service.mjs';
 import { installInboundTtlRpc } from './inbound-ttl-rpc.mjs';
 import { installInjectedContext } from './injected-context.mjs';
 import { installSessionSyncCoordinator } from './session-sync-coordinator.mjs';
+import { installSessionTimeoutRpc } from './session-timeout-rpc.mjs';
+import { getSessionTimeoutRuntime } from './session-timeout-runtime.mjs';
 import { installSessionTitlePrefix } from './session-title-prefix.mjs';
 import { installUpdateRpc } from './update-rpc.mjs';
 
@@ -45,6 +47,9 @@ export function createImHostPlugin(internals = {}) {
   const startUpdate = internals.installUpdateRpc ?? installUpdateRpc;
   const startInboundTtl = internals.installInboundTtlRpc ?? installInboundTtlRpc;
   const startInjectedContext = internals.installInjectedContext ?? installInjectedContext;
+  const startSessionTimeout = internals.installSessionTimeoutRpc ?? installSessionTimeoutRpc;
+  const resolveSessionTimeoutRuntime = internals.getSessionTimeoutRuntime
+    ?? getSessionTimeoutRuntime;
   const startDelivery = internals.installDeliveryRpc ?? installDeliveryRpc;
   const startDeliveryHttp = internals.installDeliveryHttp ?? installDeliveryHttp;
   const startSessionSync = internals.installSessionSyncCoordinator
@@ -159,6 +164,7 @@ export function createImHostPlugin(internals = {}) {
     } catch (error) {
       logger.error?.('[dsh-im] failed to activate injected-context pairing; prompts keep the inline prefix', error);
     }
+    let sessionTimeoutRuntime = null;
     if (ctx?.connection?.fetch) {
       if (hostLanguage) {
         try {
@@ -176,6 +182,13 @@ export function createImHostPlugin(internals = {}) {
         startInboundTtl(ctx, { config });
       } catch (error) {
         logger.error?.('[dsh-im] failed to activate inbound TTL settings; continuing with channels', error);
+      }
+      try {
+        sessionTimeoutRuntime = resolveSessionTimeoutRuntime(ctx, config);
+        sessionTimeoutRuntime.service.attachDeliveryService?.(deliveryService);
+        startSessionTimeout(ctx, { config, runtime: sessionTimeoutRuntime });
+      } catch (error) {
+        logger.error?.('[dsh-im] failed to activate session timeout settings; continuing with channels', error);
       }
       try {
         startDelivery(ctx, deliveryService, { authority: config.rpcAuthority });
@@ -202,6 +215,9 @@ export function createImHostPlugin(internals = {}) {
         startSessionSync(ctx, deliveryService, {
           logger,
           inputScope: ctx.root ?? ctx,
+          ...(sessionTimeoutRuntime?.service
+            ? { sessionTimeoutService: sessionTimeoutRuntime.service }
+            : {}),
         });
       } catch (error) {
         logger.error?.('[dsh-im] failed to activate Session sync; continuing with channels', error);

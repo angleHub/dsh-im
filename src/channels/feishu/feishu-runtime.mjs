@@ -158,6 +158,7 @@ export class FeishuRuntime {
   #slashSyncCancel = null;
   /** Panel syncs run one after another, so two plans never interleave. */
   #slashSyncQueue = Promise.resolve();
+  #touchSession = null;
 
   constructor({
     lark,
@@ -188,6 +189,7 @@ export class FeishuRuntime {
     slashCommands = true,
     slashPanel = null,
     wsAgent,
+    touchSession = null,
     logger = console,
   }) {
     if (!lark) throw new Error('FeishuRuntime requires the Feishu SDK');
@@ -237,7 +239,9 @@ export class FeishuRuntime {
     this.#slashCommands = consumerMode !== 'external-consumer' && Boolean(slashCommands);
     this.#slashPanel = normalizeSlashPanelConfig(slashPanel);
     this.#wsAgent = wsAgent;
-    this.#logger = logger; this.#diagnostics = createConnectionDiagnostics({ channel: 'feishu', logger });
+    this.#touchSession = typeof touchSession === 'function' ? touchSession : null;
+    this.#logger = logger;
+    this.#diagnostics = createConnectionDiagnostics({ channel: 'feishu', logger });
     this.#status = createBridgeStatus({ allowedSenderCount: normalizedOwners.length });
   }
 
@@ -390,6 +394,7 @@ export class FeishuRuntime {
         interactionCards: !['0', 'false', 'no', 'off'].includes(
           String(process.env.DSH_IM_INTERACTION_CARDS ?? '').trim().toLowerCase(),
         ),
+        touchSession: this.#touchSession,
         signal,
         logger: this.#logger,
       });

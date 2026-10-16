@@ -13,6 +13,11 @@ import {
   getInboundTtlRuntime,
   registerInboundTtlWorkspaces,
 } from '../../inbound-ttl-runtime.mjs';
+import {
+  getSessionTimeoutRuntime,
+  registerSessionTimeoutStateSource,
+  registerSessionTimeoutWorkspaceProvider,
+} from '../../session-timeout-runtime.mjs';
 import { verifyFeishuApp } from '../../../../src/channels/feishu/feishu-app.mjs';
 import { FeishuRuntime } from '../../../../src/channels/feishu/feishu-runtime.mjs';
 import { HarnessClient } from '../../../../src/channels/feishu/harness-client.mjs';
@@ -196,11 +201,26 @@ export async function createProductionController(ctx, config = {}, internals = {
     defaultWorkspace,
     botIdFrom: (bot) => bot?.id,
   });
+  const sessionTimeout = internals.sessionTimeout ?? getSessionTimeoutRuntime(ctx, config);
+  const sessionTimeoutService = sessionTimeout?.service ?? null;
+  if (sessionTimeoutService) {
+    registerSessionTimeoutStateSource(ctx, sessionTimeoutService, {
+      channel: 'feishu',
+      stateFor: stateForBotId,
+    });
+    registerSessionTimeoutWorkspaceProvider(ctx, sessionTimeoutService, {
+      channel: 'feishu',
+      workspaces,
+      defaultWorkspace,
+      stateFor: stateForBotId,
+    });
+  }
   const { controlExecutor, sessionMaintenanceExecutor, fileIngressExecutor } = createHarnessSessionExecutors(ctx, {
     controlExecutor: internals.controlExecutor,
     sessionMaintenanceExecutor: internals.sessionMaintenanceExecutor,
     fileIngressExecutor: internals.fileIngressExecutor,
     inboundTtlService,
+    ...(sessionTimeoutService ? { sessionTimeoutService } : {}),
   });
   const harness = new Harness({
     ...connection,
@@ -274,6 +294,11 @@ export async function createProductionController(ctx, config = {}, internals = {
         slashCommands: config.slashCommands !== false,
         slashPanel: botConfig.slashPanel,
         ...(wsAgent ? { wsAgent } : {}),
+        ...(sessionTimeoutService ? {
+          touchSession: (conversationKey, options) => (
+            sessionTimeoutService.touch(conversationKey, options)
+          ),
+        } : {}),
         logger: {
           error: (...args) => logger.error?.(`[${botId ?? botConfig.id}]`, ...args),
           warn: (...args) => logger.warn?.(`[${botId ?? botConfig.id}]`, ...args),

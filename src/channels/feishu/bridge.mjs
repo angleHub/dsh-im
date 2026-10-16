@@ -732,6 +732,8 @@ export class FeishuHarnessBridge {
   #requestTimeoutMs;
   /** When true, approval/question interactions render as Feishu cards (buttons). */
   #interactionCards = true;
+  /** Optional session-timeout touch callback injected by the host runtime. */
+  #touchSession = null;
 
   constructor({
     client,
@@ -759,6 +761,7 @@ export class FeishuHarnessBridge {
     replyTimeoutMs = 600_000,
     interactionCards = true,
     sessionSyncTargetsFor = null,
+    touchSession = null,
     logger = console,
     voice = null,
     signal,
@@ -820,6 +823,7 @@ export class FeishuHarnessBridge {
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#replyTimeoutMs = replyTimeoutMs;
     this.#interactionCards = interactionCards === true;
+    this.#touchSession = typeof touchSession === 'function' ? touchSession : null;
     this.#sessionSyncTargetsFor = typeof sessionSyncTargetsFor === 'function'
       ? sessionSyncTargetsFor
       : null;
@@ -1132,7 +1136,7 @@ export class FeishuHarnessBridge {
     }
     this.#rememberTopicReply(messageId, key);
 
-    const commandMessage = extractInboundMessage(event, this.#client);
+    const commandMessage = extractInboundMessage(event, this.#client, this.#logger);
     const commandText = nonEmptyString(commandMessage.content) ?? '';
     const hasImages = hasInboundImages(commandMessage);
     const hasFiles = hasInboundFiles(commandMessage);
@@ -4492,6 +4496,24 @@ export class FeishuHarnessBridge {
     };
   }
 
+  /**
+   * Reset the session-timeout idle window when a message reaches a live
+   * Session. Forwarded to askInWorkspaceSession as the onSessionResolved
+   * hook so every IM ask — including pure-text asks that never hit the
+   * file-ingress path — resets the timer. Fire-and-forget; failures are
+   * logged inside workspace-session.mjs and never block the prompt.
+   */
+  #buildSessionResolvedHandler() {
+    const botId = this.#botId;
+    const touchSession = this.#touchSession;
+    if (typeof touchSession !== 'function') return null;
+    return (conversationKey, sessionId) => touchSession(conversationKey, {
+      botId,
+      sessionId,
+      at: Date.now(),
+    });
+  }
+
   async #sendAnswerText(chatId, answer, { deliveryId, presentation, replyTo = null }) {
     const providerMessageIds = [];
     for (const chunk of splitText(answer)) {
@@ -5505,6 +5527,7 @@ export class FeishuHarnessBridge {
       contextEnhanced,
       createOptions: { signal: this.#signal },
       existsOptions: { signal: this.#signal },
+      onSessionResolved: this.#buildSessionResolvedHandler(),
       askOptions: {
         ...baseAskOptions,
         progressMode: liveCot ? 'live' : 'all',
@@ -5755,6 +5778,7 @@ export class FeishuHarnessBridge {
         contextEnhanced,
         createOptions: { signal: this.#signal },
         existsOptions: { signal: this.#signal },
+        onSessionResolved: this.#buildSessionResolvedHandler(),
         askOptions: this.#interactionAskOptions(event, key, message.files, message.images),
       });
       markAskComplete(sessionId);
@@ -5838,6 +5862,7 @@ export class FeishuHarnessBridge {
             contextEnhanced,
             createOptions: { signal: this.#signal },
             existsOptions: { signal: this.#signal },
+            onSessionResolved: this.#buildSessionResolvedHandler(),
             askOptions,
           });
           markAskComplete(completed.sessionId);
@@ -5913,6 +5938,7 @@ export class FeishuHarnessBridge {
         contextEnhanced,
         createOptions: { signal: this.#signal },
         existsOptions: { signal: this.#signal },
+        onSessionResolved: this.#buildSessionResolvedHandler(),
         askOptions: this.#interactionAskOptions(event, key, message.files, message.images),
       });
       markAskComplete(sessionId);

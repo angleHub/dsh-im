@@ -634,6 +634,53 @@ export class BotWorkspaceStore {
     });
   }
 
+  sessionDirectoryFor(botId, conversationKey) {
+    if (typeof conversationKey !== 'string' || !conversationKey) return null;
+    const entry = this.#sessionDirectories[botIdOf(botId)]?.[conversationKey];
+    return entry ? { ...entry, directory: entry.workspace } : null;
+  }
+
+  async clearSessionDirectory(botId, conversationKey, {
+    alsoClearWorkspaceOverride = false,
+    incarnation,
+  } = {}) {
+    const id = botIdOf(botId);
+    const key = conversationKeyOf(conversationKey);
+    if (!this.has(id)
+      || (incarnation !== undefined && incarnation !== this.incarnationFor(id))) {
+      const error = new Error('Bot workspace is unavailable');
+      error.code = 'workspace-bot-not-found';
+      throw error;
+    }
+    return this.#enqueue(id, async () => {
+      const previousRecords = this.#sessionDirectories[id];
+      const removed = previousRecords?.[key];
+      if (!removed) return null;
+      const previousOverrides = this.#conversationWorkspaces[id];
+      const clearOverride = alsoClearWorkspaceOverride
+        && previousOverrides?.[key] === removed.workspace;
+      const nextRecords = { ...previousRecords };
+      delete nextRecords[key];
+      if (Object.keys(nextRecords).length) this.#sessionDirectories[id] = nextRecords;
+      else delete this.#sessionDirectories[id];
+      if (clearOverride) {
+        const nextOverrides = { ...previousOverrides };
+        delete nextOverrides[key];
+        if (Object.keys(nextOverrides).length) this.#conversationWorkspaces[id] = nextOverrides;
+        else delete this.#conversationWorkspaces[id];
+        this.publishConversationWorkspaceSwitch(id, key);
+      }
+      try {
+        await this.#persist();
+      } catch (error) {
+        this.#sessionDirectories[id] = previousRecords;
+        if (clearOverride) this.#conversationWorkspaces[id] = previousOverrides;
+        throw error;
+      }
+      return { directory: removed.workspace, override: clearOverride ? removed.workspace : null };
+    });
+  }
+
   /**
    * An explicit override is stored even when it equals the current bot default,
    * so a later default change must never move a conversation that pinned its

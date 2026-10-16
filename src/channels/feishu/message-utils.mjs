@@ -442,7 +442,7 @@ function feishuImageSource(event, client, key) {
   };
 }
 
-function feishuFileSource(event, client, file) {
+function feishuFileSource(event, client, file, logger = null) {
   const key = nonEmptyString(file?.file_key);
   if (!key) return null;
   return {
@@ -558,7 +558,7 @@ function feishuReplyReference(event, client) {
   };
 }
 
-export function extractInboundMessage(event, client) {
+export function extractInboundMessage(event, client, logger = null) {
   const messageType = event?.message?.message_type;
   const parsed = parsedMessageContent(event);
   const post = postContent(event, parsed);
@@ -566,7 +566,9 @@ export function extractInboundMessage(event, client) {
     ? nonEmptyString(parsed?.image_key)
     : null;
   const imageKeys = standaloneImageKey ? [standaloneImageKey] : post?.imageKeys ?? [];
-  const file = messageType === 'file' ? feishuFileSource(event, client, parsed) : null;
+  const file = messageType === 'file'
+    ? feishuFileSource(event, client, parsed, logger)
+    : null;
   const replyTo = feishuReplyReference(event, client);
   // A forwarded card arrives as `interactive`. Without this branch its text was
   // dropped entirely, so the message looked empty and the reader got the
