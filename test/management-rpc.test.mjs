@@ -7,7 +7,7 @@ function fixture(handler, options) {
   let route;
   const dispose = async () => {};
   const ctx = { connection: { fetch: { register(value) { route = value; return dispose; } } } };
-  assert.equal(registerManagementRpc(ctx, '/feishu', handler, options), dispose);
+  assert.equal(typeof registerManagementRpc(ctx, '/feishu', handler, options), 'function');
   return route;
 }
 
@@ -148,4 +148,32 @@ test('inbound TTL remains loopback-only with default and explicit trusted-host p
       host: '192.168.1.100:3080', origin: 'http://192.168.1.100:3080',
     } }))).status, 403);
   }
+});
+
+test('shared settings route dispatches session timeout ahead of the default handler', async () => {
+  const registrations = [];
+  const ctx = { connection: { fetch: { register(value) {
+    registrations.push(value);
+    return () => {};
+  } } } };
+  const calls = [];
+  registerManagementRpc(ctx, '/dsh-im-settings', async (method) => {
+    calls.push(`default:${method}`);
+    return { ok: true, value: 'default' };
+  }, { authority: 'loopback' });
+  registerManagementRpc(ctx, '/dsh-im-settings', async (method) => {
+    calls.push(`timeout:${method}`);
+    return { ok: true, value: 'timeout' };
+  }, { authority: 'loopback', methodPrefix: 'settings.session-timeout.' });
+  assert.equal(registrations.length, 1);
+  const route = registrations[0];
+  const invoke = async (method) => (await (await route.fetch(request({ envelope: {
+    type: 'client-request', rpcId: 'settings-1', method: 'dsh-im/dsh-im-settings',
+    payload: { method, payload: {} },
+  } }))).json()).result.value;
+  assert.equal(await invoke('settings.session-timeout.get'), 'timeout');
+  assert.equal(await invoke('settings.inbound-ttl.get'), 'default');
+  assert.deepEqual(calls, [
+    'timeout:settings.session-timeout.get', 'default:settings.inbound-ttl.get',
+  ]);
 });

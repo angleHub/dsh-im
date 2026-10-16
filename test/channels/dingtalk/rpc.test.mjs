@@ -136,7 +136,7 @@ test('RPC honors an explicit loopback-only restriction', async () => {
     },
   };
 
-  assert.equal(installDingtalkRpc(ctx, controller(), undefined, 'loopback'), dispose);
+  assert.equal(typeof installDingtalkRpc(ctx, controller(), undefined, 'loopback'), 'function');
   assert.equal(registrations[0][0], '/dingtalk');
   assert.equal(registrations[0][2].path, '/api/dsh-im/dingtalk');
   await assert.rejects(registrations[0][1]('connection.status', {}, undefined, { host: 'remote.example' }), /HTTP 403/);

@@ -80,17 +80,19 @@ async function seedBotWorkspace(root, botId = 'bot-1') {
   return store;
 }
 
-/**
- * Apply a session directory using the same fence protocol as the proxy: a
- * fresh conversation-switch token before applyConversationSessionDirectory.
- */
-async function recordConversationDirectory(workspaces, botId, conversationKey, {
-  strategy, base, directory,
-}) {
-  const token = workspaces.publishConversationWorkspaceSwitch(botId, conversationKey);
-  return workspaces.applyConversationSessionDirectory(botId, conversationKey, {
-    strategy, base, directory,
-  }, { token, clearSession: async () => {} });
+async function recordConversationDirectory(workspaces, botId, conversationKey) {
+  await workspaces.setConversationDirectory(botId, { enabled: true });
+  const result = await workspaces.prepareConversationDirectory(botId, conversationKey);
+  assert.ok(result?.workspace);
+  return result.workspace;
+}
+
+function workspaceProviderWithRecord(workspaces, record) {
+  return {
+    workspaceFor: (botId) => workspaces.workspaceFor(botId),
+    sessionDirectoryFor: () => record,
+    clearSessionDirectory: (...args) => workspaces.clearSessionDirectory(...args),
+  };
 }
 
 test('cleanupFiles with scope=none is a no-op and never touches the filesystem', async () => {
@@ -134,13 +136,7 @@ test('cleanupFiles with scope=directory removes a recorded conversation director
   const root = await directory(t);
   const workspaces = await seedBotWorkspace(root);
   // Mint a conversation directory under the base, then record it.
-  const convDir = join(root, 'conv-feishu-bot-1-abc123');
-  await mkdir(convDir, { recursive: true });
-  await recordConversationDirectory(workspaces, 'bot-1', 'feishu:bot:openId', {
-    strategy: 'per-conversation',
-    base: root,
-    directory: convDir,
-  });
+  const convDir = await recordConversationDirectory(workspaces, 'bot-1', 'feishu:bot:openId');
   assert.equal(workspaces.sessionDirectoryFor('bot-1', 'feishu:bot:openId')?.directory, convDir);
 
   const store = memoryStore({ enabled: true, cleanupScope: 'directory' });
@@ -172,11 +168,6 @@ test('cleanupFiles with scope=directory degrades to inbound when the path-shape 
   const convDir = join(root, 'user-thing-not-minted');
   await mkdir(convDir, { recursive: true });
   await stageInbound(convDir, '20260901-000000-aaaaaa');
-  await recordConversationDirectory(workspaces, 'bot-1', 'feishu:bot:openId', {
-    strategy: 'per-conversation',
-    base: root,
-    directory: convDir,
-  });
 
   const store = memoryStore({ enabled: true, cleanupScope: 'directory' });
   const service = createSessionTimeoutService({
@@ -186,7 +177,10 @@ test('cleanupFiles with scope=directory degrades to inbound when the path-shape 
     logger: { error: () => {}, warn: () => {}, info: () => {} },
     now: () => 0,
   });
-  service.registerWorkspaceProvider('test', { workspaces, defaultWorkspace: root });
+  service.registerWorkspaceProvider('test', {
+    workspaces: workspaceProviderWithRecord(workspaces, { directory: convDir, base: root, prefix: 'conv-' }),
+    defaultWorkspace: root,
+  });
   const summary = await service.cleanupFiles(
     'feishu:bot:openId',
     { botId: 'bot-1' },
@@ -199,19 +193,13 @@ test('cleanupFiles with scope=directory degrades to inbound when the path-shape 
   assert.equal((await stat(convDir)).isDirectory(), true,
     'the malformed directory is NOT deleted');
   await assert.rejects(stat(join(inboundRoot(convDir), '20260901-000000-aaaaaa')), /ENOENT/);
-  assert.notEqual(workspaces.sessionDirectoryFor('bot-1', 'feishu:bot:openId'), null,
-    'workspaces.json record still present because removal was skipped');
+  assert.equal(workspaces.sessionDirectoryFor('bot-1', 'feishu:bot:openId'), null);
 });
 
 test('cleanupFiles with scope=directory refuses to delete the base workspace root', async (t) => {
   const root = await directory(t);
   const workspaces = await seedBotWorkspace(root);
   // Pretend the conversation directory was somehow recorded as the base root.
-  await recordConversationDirectory(workspaces, 'bot-1', 'feishu:bot:openId', {
-    strategy: 'per-conversation',
-    base: root,
-    directory: root,
-  });
 
   const store = memoryStore({ enabled: true, cleanupScope: 'directory' });
   const service = createSessionTimeoutService({
@@ -221,7 +209,10 @@ test('cleanupFiles with scope=directory refuses to delete the base workspace roo
     logger: { error: () => {}, warn: () => {}, info: () => {} },
     now: () => 0,
   });
-  service.registerWorkspaceProvider('test', { workspaces, defaultWorkspace: root });
+  service.registerWorkspaceProvider('test', {
+    workspaces: workspaceProviderWithRecord(workspaces, { directory: root, base: root, prefix: 'conv-' }),
+    defaultWorkspace: root,
+  });
   const summary = await service.cleanupFiles(
     'feishu:bot:openId',
     { botId: 'bot-1' },
@@ -235,13 +226,7 @@ test('cleanupFiles with scope=directory refuses to delete the base workspace roo
 test('BotWorkspaceStore.clearSessionDirectory removes both directory record and optional workspace override', async (t) => {
   const root = await directory(t);
   const workspaces = await seedBotWorkspace(root);
-  const convDir = join(root, 'conv-feishu-bot-1-abc456');
-  await mkdir(convDir, { recursive: true });
-  await recordConversationDirectory(workspaces, 'bot-1', 'feishu:bot:openId', {
-    strategy: 'per-conversation',
-    base: root,
-    directory: convDir,
-  });
+  const convDir = await recordConversationDirectory(workspaces, 'bot-1', 'feishu:bot:openId');
   assert.notEqual(workspaces.sessionDirectoryFor('bot-1', 'feishu:bot:openId'), null);
   const removed = await workspaces.clearSessionDirectory('bot-1', 'feishu:bot:openId', {
     alsoClearWorkspaceOverride: true,

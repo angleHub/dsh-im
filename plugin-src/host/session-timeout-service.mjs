@@ -451,6 +451,7 @@ export function createSessionTimeoutService({
     }
     return cleanupDirectoryScope({
       workspaces, botId, conversationKey, directory, base, defaultWorkspace,
+      prefix: directoryRecord?.prefix ?? CONVERSATION_DIRECTORY_PREFIX,
     });
   }
 
@@ -489,7 +490,7 @@ export function createSessionTimeoutService({
   }
 
   async function cleanupDirectoryScope({
-    workspaces, botId, conversationKey, directory, base, defaultWorkspace,
+    workspaces, botId, conversationKey, directory, base, defaultWorkspace, prefix,
   }) {
     if (!directory) {
       // No directory was ever recorded for this conversation; degrade to
@@ -533,7 +534,7 @@ export function createSessionTimeoutService({
       });
       return { ...fallback, scope: 'directory', reason: 'degraded:is-base' };
     }
-    if (!isConversationDirectoryPath(directory, { prefix: CONVERSATION_DIRECTORY_PREFIX })) {
+    if (!isConversationDirectoryPath(directory, { prefix })) {
       logger.warn?.(
         `[dsh-im] session timeout directory path-shape mismatch: ${directory}`,
       );

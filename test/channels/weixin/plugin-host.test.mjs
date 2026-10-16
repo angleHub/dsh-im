@@ -54,7 +54,7 @@ test('Host plugin accepts Harness-admitted LAN requests on the Weixin RPC channe
     }) },
   };
   const returned = await apply(ctx, { controller: controllerFixture() });
-  assert.equal(returned, dispose);
+  assert.equal(typeof returned, 'function');
   assert.equal(registration.channel, '/weixin');
   assert.equal(registration.options.path, '/api/dsh-im/weixin');
   assert.equal((await registration.handler('connection.status', {}, undefined, {

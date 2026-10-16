@@ -50,32 +50,6 @@ export function registerManagementRpc(ctx, channel, handler, { authority, method
   if (typeof ctx?.connection?.fetch?.register !== 'function') {
     throw new TypeError('DSH Host Connection Fetch registry is required');
   }
-  if (methodPrefix === undefined) {
-    return ctx.connection.fetch.register({
-      path: `/api/${endpoint}`,
-      methods: ['POST'],
-      requestBody: 'buffered',
-      async fetch(request) {
-        if (policy === 'loopback' && !isLoopbackRequest(request)) return new Response('forbidden', { status: 403 });
-        if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
-        if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
-          return new Response('content type must be application/json', { status: 415 });
-        }
-        let message;
-        try { message = await request.json(); }
-        catch { return new Response('body is not JSON', { status: 400 }); }
-        const rpcId = typeof message?.rpcId === 'string' ? message.rpcId : 'invalid-request';
-        const call = message?.payload;
-        if (!isRecord(message) || message.type !== 'client-request' || typeof message.rpcId !== 'string'
-          || message.method !== endpoint || !isRecord(call) || typeof call.method !== 'string'
-          || !Object.hasOwn(call, 'payload')) {
-          return reply(rpcId, { ok: false, error: { code: 'gateway/bad-request', message: 'Invalid IM management request.' } });
-        }
-        try { return reply(rpcId, await handler(call.method, call.payload, request.signal)); }
-        catch { return new Response('IM management handler failed', { status: 500 }); }
-      },
-    });
-  }
   let endpoints = routeRegistries.get(ctx);
   if (!endpoints) {
     endpoints = new Map();
@@ -90,7 +64,8 @@ export function registerManagementRpc(ctx, channel, handler, { authority, method
       requestBody: 'buffered',
       async fetch(request) {
       // DSH applies browser authentication and Host/Origin trust before this handler.
-        if (policy === 'loopback' && !isLoopbackRequest(request)) return new Response('forbidden', { status: 403 });
+        if ([...route.handlers.values()].every((entry) => entry.policy === 'loopback')
+          && !isLoopbackRequest(request)) return new Response('forbidden', { status: 403 });
         if (request.method !== 'POST') return new Response('method not allowed', { status: 405 });
         if (request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
           return new Response('content type must be application/json', { status: 415 });
@@ -105,11 +80,16 @@ export function registerManagementRpc(ctx, channel, handler, { authority, method
           || !Object.hasOwn(call, 'payload')) {
           return reply(rpcId, { ok: false, error: { code: 'gateway/bad-request', message: 'Invalid IM management request.' } });
         }
-        const selected = [...route.handlers.values()].find((entry) => (
-          !entry.methodPrefix || call.method.startsWith(entry.methodPrefix)
-        ));
+        const handlers = [...route.handlers.values()];
+        const selected = handlers.filter((entry) => entry.methodPrefix
+          && call.method.startsWith(entry.methodPrefix))
+          .sort((a, b) => b.methodPrefix.length - a.methodPrefix.length)[0]
+          ?? handlers.find((entry) => !entry.methodPrefix);
         if (!selected) {
           return reply(rpcId, { ok: false, error: { code: 'gateway/unknown-method', message: 'Unknown IM management method.' } });
+        }
+        if (selected.policy === 'loopback' && !isLoopbackRequest(request)) {
+          return new Response('forbidden', { status: 403 });
         }
         try {
           return reply(rpcId, await selected.handler(call.method, call.payload, request.signal));
@@ -121,7 +101,7 @@ export function registerManagementRpc(ctx, channel, handler, { authority, method
     endpoints.set(endpoint, route);
   }
   const token = Symbol('management-rpc-handler');
-  route.handlers.set(token, { handler, methodPrefix });
+  route.handlers.set(token, { handler, methodPrefix, policy });
   return () => {
     if (route.handlers.get(token) !== undefined) route.handlers.delete(token);
     if (route.handlers.size > 0) return true;

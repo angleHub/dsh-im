@@ -85,7 +85,7 @@ test('iMessage RPC registration installs the native handler', async () => {
   };
   const handle = installIMessageRpc(ctx, controller());
 
-  assert.equal(handle, dispose);
+  assert.equal(typeof handle, 'function');
   assert.equal(registered.channel, '/imessage');
   assert.equal(registered.route.path, '/api/dsh-im/imessage');
   assert.deepEqual(await registered.handler(IMESSAGE_ENDPOINTS.status, {}), {

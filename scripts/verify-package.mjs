@@ -149,6 +149,7 @@ if (client.includes('settings.plugins.tab') || clientSources.includes('settings.
 // Connections still have no channel-enable toggle. Checkable inputs are owned
 // only by the shared context editor, the saved-target Session sync row, the
 // email settings, the Telegram thinking-traces block, and Feishu panel settings.
+// Feishu conversation-directory settings owns one additional switch.
 // The context editor contains one switch template and one mapped field-input
 // template; the delivery target adds one ordinary checkbox template; the
 // Telegram thinking-traces block adds one ordinary checkbox template. General
@@ -158,12 +159,14 @@ const deliverySettingsSource = await readFile(resolve(root, 'plugin-src/client/d
 const emailSettingsSource = await readFile(resolve(root, 'plugin-src/client/channels/email/index.js'), 'utf8');
 const thinkingTracesSource = await readFile(resolve(root, 'plugin-src/client/channels/telegram/thinking-traces.js'), 'utf8');
 const botGeneralSettingsSource = await readFile(resolve(root, 'plugin-src/client/bot-general-settings.js'), 'utf8');
+const conversationDirectorySettingsSource = await readFile(resolve(root, 'plugin-src/client/channels/feishu/conversation-directory-settings.js'), 'utf8');
 const otherClientSources = clientSources
   .replace(contextEditorSource, '')
   .replace(deliverySettingsSource, '')
   .replace(emailSettingsSource, '')
   .replace(thinkingTracesSource, '')
-  .replace(botGeneralSettingsSource, '');
+  .replace(botGeneralSettingsSource, '')
+  .replace(conversationDirectorySettingsSource, '');
 if (/role:\s*["']switch|type:\s*["']checkbox/.test(otherClientSources)
   || (deliverySettingsSource.match(/type:\s*["']checkbox["']/g) ?? []).length !== 1
   || /role:\s*["']switch["']/u.test(deliverySettingsSource)
@@ -171,8 +174,10 @@ if (/role:\s*["']switch|type:\s*["']checkbox/.test(otherClientSources)
   || /role:\s*["']switch["']/u.test(thinkingTracesSource)
   || (botGeneralSettingsSource.match(/type:\s*["']checkbox["']/g) ?? []).length !== 1
   || (botGeneralSettingsSource.match(/role:\s*["']switch["']/g) ?? []).length !== 1
-  || (client.match(/role:\s*["']switch["']/g) ?? []).length !== 2
-  || (client.match(/type:\s*["']checkbox["']/g) ?? []).length !== 5) {
+  || (conversationDirectorySettingsSource.match(/type:\s*["']checkbox["']/g) ?? []).length !== 1
+  || (conversationDirectorySettingsSource.match(/role:\s*["']switch["']/g) ?? []).length !== 1
+  || (client.match(/role:\s*["']switch["']/g) ?? []).length !== 3
+  || (client.match(/type:\s*["']checkbox["']/g) ?? []).length !== 6) {
   throw new Error('checkable inputs must be limited to context enhancement, Session sync, email settings, Telegram thinking traces, and Feishu panel settings');
 }
 for (const marker of ['bot.context-enhancement.set', '<dsh_im_source>', '<dsh_im_source_guidance>']) {

@@ -38,7 +38,7 @@ test('Host installs RPC for an injected controller that accepts Harness-admitted
     },
   };
 
-  assert.equal(await apply(ctx, { controller: controller() }), dispose);
+  assert.equal(typeof await apply(ctx, { controller: controller() }), 'function');
   assert.equal(calls[0][0], '/dingtalk');
   assert.equal(calls[0][2].path, '/api/dsh-im/dingtalk');
   assert.equal((await calls[0][1]('connection.status', {})).ok, true);

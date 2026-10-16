@@ -760,14 +760,6 @@ export class TextHarnessBridge {
       }
       if (!hasImages && !hasFiles && command === '/new') {
         const receipt = await startNewConversation({ state: this.#state, harness: this.#harness, key: conversationKey });
-        if (this.#contextHooks?.onSessionCleared) {
-          try {
-            await this.#contextHooks.onSessionCleared(conversationKey);
-          } catch (error) {
-            // The cleared session is already done; a failed context reset must not block the command.
-            this.#logger.warn?.(`[dsh-im:${this.#descriptor.key}] failed to reset context anchors after /new:`, error?.message ?? error);
-          }
-        }
         await this.#bot.sendText(target, `${receipt}\n${t('请发送你的问题。')}`);
         return;
       }
